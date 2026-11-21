@@ -1,3 +1,8 @@
+To get around the issue where the right Joy-Con + Ring-Con in 0x40 0x03 (MaybeRingcon) mode returns ring strain in plaintext but gyroscope data in encrypted form:
+
+
+bind the left Joy-Con to the front of the Ring-Con to replace the right Joy-Con’s gyroscope, and modify Eden to adapt to this gyroscope.
+
 <!--
 # SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
