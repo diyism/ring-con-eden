@@ -1,7 +1,6 @@
-To get around the issue where the right Joy-Con + Ring-Con in 0x40 0x03 (MaybeRingcon) mode returns ringcon strain data in plaintext but gyroscope data in encrypted form:
-https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/issues/97
-
-bind the left Joy-Con to the front of the Ring-Con to replace the right Joy-Con’s gyroscope, and modify Eden to adapt to this gyroscope.
+To get around the issue where the right Joy-Con + Ring-Con in 0x40 0x03 (MaybeRingcon) mode returns ringcon strain data in plaintext but gyroscope data in encrypted form
+(https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/issues/97),
+bind the left Joy-Con to the front of the Ring-Con to replace the right Joy-Con’s gyroscope, and modify Eden(this eden fork repo) to adapt to this gyroscope.
 
 ================================================================================
 
