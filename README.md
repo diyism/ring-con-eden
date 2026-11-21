@@ -1,6 +1,14 @@
 To get around the issue where the right Joy-Con + Ring-Con in 0x40 0x03 (MaybeRingcon) mode returns ringcon strain data in plaintext but gyroscope data in encrypted form
 (https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/issues/97),
-bind the left Joy-Con to the front of the Ring-Con to replace the right Joy-Con’s gyroscope, and modify Eden(this eden fork repo) to adapt to this gyroscope.
+bind the left Joy-Con to the front of the Ring-Con to replace the right Joy-Con’s gyroscope, and modify Eden(this eden fork repo) to adapt to this gyroscope:
+![](./left_as_right_ringcon_gyro.png)
+
+Player 1: connect controller = right Joy-Con; input device = right Joy-Con 1; Motion 1 = Motion 2 = joycon (left joycon 1 bond to ringcon head)
+
+Player 2: connect controller = dual Joy-Cons; input device = "left Joy-Con 2" or "xbox 360 controller 0"(linux dsu manager connected to dsu controller app); 
+Motion 1=Motion 2=cemuhookUDP(android phone dsu controller app, bond to left leg)
+
+Motion Configure: CemuHookUDP config: 192.168.0.xxx:26760 (dsu controller app, android phone ip)
 
 ================================================================================
 
