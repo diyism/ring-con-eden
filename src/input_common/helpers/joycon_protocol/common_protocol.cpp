@@ -91,7 +91,7 @@ Common::Input::DriverResult JoyconCommonProtocol::GetSubCommandResponse(
         if (tries++ > MaxTries) {
             return Common::Input::DriverResult::Timeout;
         }
-    } while (output.input_report.report_mode != ReportMode::SUBCMD_REPLY &&
+    } while (output.input_report.report_mode != ReportMode::SUBCMD_REPLY ||
              output.sub_command != sc);
 
     return Common::Input::DriverResult::Success;

@@ -9,6 +9,7 @@
 #include <common/scope_exit.h>
 
 #include <ranges>
+#include "common/settings.h"
 #include "common/thread.h"
 #include "common/assert.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -1037,6 +1038,7 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
     auto& emulated = controller.motion_values[index].emulated;
 
     raw_status = TransformToMotion(callback);
+    emulated.SetFacingOffset(raw_status.ringcon_facing_offset);
     emulated.SetAcceleration(Common::Vec<f32, 3>{
         raw_status.accel.x.value,
         raw_status.accel.y.value,
@@ -1337,12 +1339,24 @@ Common::Input::DriverResult EmulatedController::SetPollingMode(
     auto& right_output_device = output_devices[static_cast<std::size_t>(DeviceIndex::Right)];
     auto& nfc_output_device = output_devices[3];
 
+    // Ring Fit initializes the hidbus Ring-Con and then asks the right
+    // Joy-Con for ordinary active polling as part of its normal startup.
+    // Do not tear down the Ring-Con session in response to that request;
+    // the Ring-Con hidbus owns the right device while it is active.
+    const bool preserve_ring = Settings::values.enable_ring_controller.GetValue() &&
+                               controller.right_polling_mode == Common::Input::PollingMode::Ring &&
+                               polling_mode == Common::Input::PollingMode::Active;
+
     if (device_index == EmulatedDeviceIndex::LeftIndex) {
         controller.left_polling_mode = polling_mode;
         return left_output_device->SetPollingMode(polling_mode);
     }
 
     if (device_index == EmulatedDeviceIndex::RightIndex) {
+        if (preserve_ring) {
+            LOG_DEBUG(Service_HID, "Keeping Ring-Con polling active for right Joy-Con");
+            return Common::Input::DriverResult::Success;
+        }
         controller.right_polling_mode = polling_mode;
         const auto virtual_nfc_result = nfc_output_device->SetPollingMode(polling_mode);
         const auto mapped_nfc_result = right_output_device->SetPollingMode(polling_mode);
@@ -1352,10 +1366,30 @@ Common::Input::DriverResult EmulatedController::SetPollingMode(
             right_output_device->SetPollingMode(Common::Input::PollingMode::Active);
         }
 
+        if (mapped_nfc_result == Common::Input::DriverResult::Success &&
+            polling_mode == Common::Input::PollingMode::Ring) {
+            // Ring-Con mode changes the right Joy-Con IMU stream. Discard
+            // the ordinary-mode AHRS bias and integrated rotation so a stale
+            // right-hand orientation cannot continue spinning the game.
+            auto& right_motion = controller.motion_values[RightIndex].emulated;
+            right_motion.SetGyroBias({});
+            right_motion.ResetRotations();
+            right_motion.ResetQuaternion();
+            controller.motion_state[RightIndex] = {};
+        }
+
         if (virtual_nfc_result == Common::Input::DriverResult::Success) {
             return virtual_nfc_result;
         }
         return mapped_nfc_result;
+    }
+
+    if (preserve_ring) {
+        controller.left_polling_mode = polling_mode;
+        left_output_device->SetPollingMode(polling_mode);
+        nfc_output_device->SetPollingMode(polling_mode);
+        LOG_DEBUG(Service_HID, "Keeping Ring-Con polling active for right Joy-Con (all devices)");
+        return Common::Input::DriverResult::Success;
     }
 
     controller.left_polling_mode = polling_mode;

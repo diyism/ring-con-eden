@@ -88,6 +88,10 @@ void MotionInput::SetUserGyroThreshold(f32 threshold) {
     user_gyro_threshold = threshold / ThresholdStandard;
 }
 
+void MotionInput::SetFacingOffset(bool enabled) {
+    facing_offset = enabled;
+}
+
 void MotionInput::EnableReset(bool reset) {
     reset_enabled = reset;
 }
@@ -229,16 +233,26 @@ void MotionInput::UpdateOrientation(u64 elapsed_time) {
 }
 
 std::array<Common::Vec<f32, 3>, 3> MotionInput::GetOrientation() const {
+    const auto output_quat = GetOutputQuaternion();
     const Common::Vec<f32, 4> quad{
-        -quat[1],
-        -quat[0],
-        -quat[3],
-        -quat[2],
+        -output_quat[1],
+        -output_quat[0],
+        -output_quat[3],
+        -output_quat[2],
     };
     const std::array<f32, 16> matrix4x4 = quad.ToMatrix();
-    return {Common::Vec<f32, 3>(matrix4x4[0], matrix4x4[1], -matrix4x4[2]),
-            Common::Vec<f32, 3>(matrix4x4[4], matrix4x4[5], -matrix4x4[6]),
-            Common::Vec<f32, 3>(-matrix4x4[8], -matrix4x4[9], matrix4x4[10])};
+    const Common::Vec<f32, 3> row_x{matrix4x4[0], matrix4x4[1], -matrix4x4[2]};
+    const Common::Vec<f32, 3> row_y{matrix4x4[4], matrix4x4[5], -matrix4x4[6]};
+    const Common::Vec<f32, 3> row_z{-matrix4x4[8], -matrix4x4[9], matrix4x4[10]};
+
+    if (!facing_offset) {
+        return {row_x, row_y, row_z};
+    }
+
+    // Keep the independent 180-degree facing correction in the quaternion,
+    // then compensate the remaining flat-table heading error with a separate
+    // clockwise 90-degree rotation around the game's vertical axis.
+    return {row_y, -row_x, row_z};
 }
 
 Common::Vec<f32, 3> MotionInput::GetAcceleration() const {
@@ -254,7 +268,7 @@ Common::Vec<f32, 3> MotionInput::GetGyroBias() const {
 }
 
 Common::Vec<f32, 4> MotionInput::GetQuaternion() const {
-    return quat;
+    return GetOutputQuaternion();
 }
 
 Common::Vec<f32, 3> MotionInput::GetRotations() const {
@@ -262,17 +276,18 @@ Common::Vec<f32, 3> MotionInput::GetRotations() const {
 }
 
 Common::Vec<f32, 3> MotionInput::GetEulerAngles() const {
+    const auto output_quat = GetOutputQuaternion();
     // roll (x-axis rotation)
-    const float sinr_cosp = 2 * (quat[3] * quat[0] + quat[1] * quat[2]);
-    const float cosr_cosp = 1 - 2 * (quat[0] * quat[0] + quat[1] * quat[1]);
+    const float sinr_cosp = 2 * (output_quat[3] * output_quat[0] + output_quat[1] * output_quat[2]);
+    const float cosr_cosp = 1 - 2 * (output_quat[0] * output_quat[0] + output_quat[1] * output_quat[1]);
 
     // pitch (y-axis rotation)
-    const float sinp = std::sqrt(1 + 2 * (quat[3] * quat[1] - quat[0] * quat[2]));
-    const float cosp = std::sqrt(1 - 2 * (quat[3] * quat[1] - quat[0] * quat[2]));
+    const float sinp = std::sqrt(1 + 2 * (output_quat[3] * output_quat[1] - output_quat[0] * output_quat[2]));
+    const float cosp = std::sqrt(1 - 2 * (output_quat[3] * output_quat[1] - output_quat[0] * output_quat[2]));
 
     // yaw (z-axis rotation)
-    const float siny_cosp = 2 * (quat[3] * quat[2] + quat[0] * quat[1]);
-    const float cosy_cosp = 1 - 2 * (quat[1] * quat[1] + quat[2] * quat[2]);
+    const float siny_cosp = 2 * (output_quat[3] * output_quat[2] + output_quat[0] * output_quat[1]);
+    const float cosy_cosp = 1 - 2 * (output_quat[1] * output_quat[1] + output_quat[2] * output_quat[2]);
 
     return {
         std::atan2(sinr_cosp, cosr_cosp),
@@ -291,6 +306,7 @@ void MotionInput::ResetOrientation() {
             quat[3] = 0;
             quat[0] = 0;
             quat[1] = 0;
+
             quat[2] = -1;
             SetOrientationFromAccelerometer();
             integral_error = {};
@@ -299,6 +315,17 @@ void MotionInput::ResetOrientation() {
     } else {
         reset_counter = 0;
     }
+}
+
+Common::Vec<f32, 4> MotionInput::GetOutputQuaternion() const {
+    if (!facing_offset) {
+        return quat;
+    }
+
+    // Preserve the original 180-degree facing correction. The separate
+    // flat-table heading correction is applied in GetOrientation(), after
+    // this quaternion has been converted to the game's orientation matrix.
+    return Common::Vec<f32, 4>{quat[2], quat[3], -quat[0], -quat[1]};
 }
 
 void MotionInput::SetOrientationFromAccelerometer() {

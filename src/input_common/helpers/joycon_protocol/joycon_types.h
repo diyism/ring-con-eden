@@ -476,6 +476,7 @@ struct RingCalibration {
     s16 default_value;
     s16 max_value;
     s16 min_value;
+    bool is_calibrated{};
 };
 
 struct Color {
@@ -727,6 +728,7 @@ struct MotionStatus {
 
 struct RingStatus {
     bool is_enabled;
+    bool is_calibrated;
     s16 default_value;
     s16 max_value;
     s16 min_value;

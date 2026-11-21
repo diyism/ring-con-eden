@@ -80,6 +80,8 @@ private:
     s16 ring_data_max = 0;
     s16 ring_data_default = 0;
     s16 ring_data_min = 0;
+    s32 ring_data_sum = 0;
+    u16 ring_data_samples = 0;
 };
 
 } // namespace InputCommon::Joycon

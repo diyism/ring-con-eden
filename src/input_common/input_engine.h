@@ -34,6 +34,7 @@ struct BasicMotion {
     float accel_y{};
     float accel_z{};
     u64 delta_timestamp{};
+    bool ringcon_facing_offset{};
 };
 
 // Types of input that are stored in the engine

@@ -170,6 +170,7 @@ void EmulatedConsole::SetMotion(const Common::Input::CallbackStatus& callback) {
     auto& emulated = console.motion_values.emulated;
 
     raw_status = TransformToMotion(callback);
+    emulated.SetFacingOffset(raw_status.ringcon_facing_offset);
     emulated.SetAcceleration(Common::Vec<f32, 3>{
         raw_status.accel.x.value,
         raw_status.accel.y.value,

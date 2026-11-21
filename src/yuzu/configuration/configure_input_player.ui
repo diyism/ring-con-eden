@@ -1825,6 +1825,58 @@
            </item>
            <item>
             <layout class="QHBoxLayout" name="miscButtons">
+            <item>
+             <widget class="QGroupBox" name="buttonCalibrateMotionGroup">
+              <property name="title">
+               <string>Calibrate</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
+              </property>
+              <layout class="QVBoxLayout" name="buttonCalibrateMotionVerticalLayout">
+               <property name="spacing">
+                <number>3</number>
+               </property>
+               <property name="leftMargin">
+                <number>3</number>
+               </property>
+               <property name="topMargin">
+                <number>3</number>
+               </property>
+               <property name="rightMargin">
+                <number>3</number>
+               </property>
+               <property name="bottomMargin">
+                <number>3</number>
+               </property>
+               <item>
+                <widget class="QPushButton" name="buttonCalibrateMotion">
+                 <property name="minimumSize">
+                  <size>
+                   <width>70</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>68</width>
+                   <height>16777215</height>
+                  </size>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">min-width: 68px;</string>
+                 </property>
+                 <property name="toolTip">
+                  <string>Keep the controller still while motion calibration runs.</string>
+                 </property>
+                 <property name="text">
+                  <string>Calib</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
              <property name="spacing">
               <number>3</number>
              </property>

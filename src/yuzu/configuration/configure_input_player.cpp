@@ -397,6 +397,13 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
         ui->buttonMotionRight,
     };
 
+    connect(ui->buttonCalibrateMotion, &QPushButton::clicked, this, [this] {
+        // Use Eden's existing motion calibration path. It learns the current
+        // stationary gyro bias and resets the motion orientation after the
+        // calibration window completes.
+        emulated_controller->StartMotionCalibration();
+    });
+
     analog_map_deadzone_label = {ui->labelLStickDeadzone, ui->labelRStickDeadzone};
     analog_map_deadzone_slider = {ui->sliderLStickDeadzone, ui->sliderRStickDeadzone};
     analog_map_modifier_groupbox = {ui->buttonLStickModGroup, ui->buttonRStickModGroup};
@@ -1159,6 +1166,7 @@ void ConfigureInputPlayer::SetConnectionLocked(bool locked) {
     // The automatic modes bind motion themselves (the controller's own, or its real device's)
     ui->buttonMotionLeftGroup->setVisible(!locked);
     ui->buttonMotionRightGroup->setVisible(!locked);
+    ui->buttonCalibrateMotionGroup->setVisible(!locked);
     if (ui->groupConnectedController->isCheckable() == !locked) {
         return;
     }

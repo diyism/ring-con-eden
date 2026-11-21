@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <format>
 
 #include "common/param_package.h"
@@ -60,7 +61,13 @@ void Joycons::Reset() {
 
 void Joycons::Setup() {
     u32 port = 0;
-    PreSetController(GetIdentifier(0, Joycon::ControllerType::None));
+    const auto ring_identifier = GetIdentifier(0, Joycon::ControllerType::None);
+    PreSetController(ring_identifier);
+    // Ring-Con pressure is exposed as the synthetic Joy-Con axis 100.  The
+    // analog input device also asks for its paired Y axis during updates, so
+    // register both axes on the synthetic controller up front.
+    PreSetAxis(ring_identifier, 100);
+    PreSetAxis(ring_identifier, 101);
     for (auto& device : left_joycons) {
         PreSetController(GetIdentifier(port, Joycon::ControllerType::Left));
         device = std::make_shared<Joycon::JoyconDriver>(port++);
@@ -473,14 +480,32 @@ void Joycons::OnStickUpdate(std::size_t port, Joycon::ControllerType type, int i
 void Joycons::OnMotionUpdate(std::size_t port, Joycon::ControllerType type, int id,
                              const Joycon::MotionData& value) {
     const auto identifier = GetIdentifier(port, type);
+    // The currently used left Joy-Con A is mounted on the Ring-Con assembly
+    // with a +90 degree rotation around its X axis. Keep this correction
+    // limited to left-controller port 0 so a future left Joy-Con B on port 1
+    // keeps the normal coordinate frame.
+    const bool ringcon_left_joycon_a = type == Joycon::ControllerType::Left && port == 0;
+    const auto map_ringcon_accel = [](f32 x, f32 y, f32 z) {
+        return std::array<f32, 3>{y, z, -x};
+    };
+    const auto map_ringcon_gyro = [](f32 x, f32 y, f32 z) {
+        return std::array<f32, 3>{-y, -z, x};
+    };
+    const auto gyro = ringcon_left_joycon_a
+                          ? map_ringcon_gyro(value.gyro_x, value.gyro_y, value.gyro_z)
+                          : std::array<f32, 3>{value.gyro_x, value.gyro_y, value.gyro_z};
+    const auto accel = ringcon_left_joycon_a
+                           ? map_ringcon_accel(value.accel_x, value.accel_y, value.accel_z)
+                           : std::array<f32, 3>{value.accel_x, value.accel_y, value.accel_z};
     BasicMotion motion_data{
-        .gyro_x = value.gyro_x,
-        .gyro_y = value.gyro_y,
-        .gyro_z = value.gyro_z,
-        .accel_x = value.accel_x,
-        .accel_y = value.accel_y,
-        .accel_z = value.accel_z,
+        .gyro_x = gyro[0],
+        .gyro_y = gyro[1],
+        .gyro_z = gyro[2],
+        .accel_x = accel[0],
+        .accel_y = accel[1],
+        .accel_z = accel[2],
         .delta_timestamp = 15000,
+        .ringcon_facing_offset = ringcon_left_joycon_a,
     };
     SetMotion(identifier, id, motion_data);
 }

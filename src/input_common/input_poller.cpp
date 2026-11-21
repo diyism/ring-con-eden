@@ -603,6 +603,7 @@ public:
             }
         }
         status.delta_timestamp = basic_motion.delta_timestamp;
+        status.ringcon_facing_offset = basic_motion.ringcon_facing_offset;
         return status;
     }
 

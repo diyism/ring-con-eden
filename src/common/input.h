@@ -179,6 +179,7 @@ struct MotionStatus {
     MotionSensor accel{};
     // Time since last measurement in microseconds
     u64 delta_timestamp{};
+    bool ringcon_facing_offset{};
     // Request to update after reading the value
     bool force_update{};
 };

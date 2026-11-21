@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <vector>
+#include "common/logging.h"
 #include "input_common/helpers/joycon_protocol/poller.h"
 
 namespace InputCommon::Joycon {
@@ -24,12 +25,24 @@ void JoyconPoller::ReadActiveMode(std::span<u8> buffer, const MotionStatus& moti
     InputReportActive data{};
     memcpy(&data, buffer.data(), sizeof(InputReportActive));
 
+    // Enabling MaybeRingcon changes the meaning of the right Joy-Con's
+    // report stream. Reset the motion pipeline exactly at that boundary so
+    // ordinary-mode bias, filtered gyro, and quaternion history cannot leak
+    // into the Ring-Con stream and appear as a sudden continuous spin.
+    const bool new_ringcon_mode = device_type == ControllerType::Right && ring_status.is_enabled;
+    if (new_ringcon_mode != ringcon_mode_active) {
+        ResetMotionCalibration();
+        ringcon_mode_active = new_ringcon_mode;
+        LOG_INFO(Input, "Right Joy-Con motion report mode changed: Ring-Con={}",
+                 new_ringcon_mode);
+    }
+
     switch (device_type) {
     case ControllerType::Left:
         UpdateActiveLeftPadInput(data, motion_status);
         break;
     case ControllerType::Right:
-        UpdateActiveRightPadInput(data, motion_status);
+        UpdateActiveRightPadInput(data, motion_status, ring_status.is_enabled);
         break;
     case ControllerType::Pro:
         UpdateActiveProPadInput(data, motion_status);
@@ -73,6 +86,23 @@ void JoyconPoller::UpdateColor(const Color& color) {
     callbacks.on_color_data(color);
 }
 
+void JoyconPoller::ResetMotionCalibration() {
+    // MaybeRingcon changes the IMU report stream.  Bias learned in ordinary
+    // Joy-Con mode must not be reused after Ring-Con initialization.
+    filtered_gyro = {};
+    gyro_filter_initialized = false;
+    gyro_bias_sum = {};
+    gyro_bias = {};
+    gyro_bias_samples = 0;
+    filtered_accel = {};
+    accel_filter_initialized = false;
+    ringcon_last_raw_gyro = {};
+    ringcon_gyro_bias = {};
+    ringcon_stable_samples = 0;
+    ringcon_raw_initialized = false;
+    ringcon_bias_initialized = false;
+}
+
 void JoyconPoller::UpdateAmiibo(const Joycon::TagInfo& tag_info) {
     callbacks.on_amiibo_data(tag_info);
 }
@@ -82,7 +112,29 @@ void JoyconPoller::UpdateCamera(const std::vector<u8>& camera_data, IrsResolutio
 }
 
 void JoyconPoller::UpdateRing(s16 value, const RingStatus& ring_status) {
-    float normalized_value = static_cast<float>(value - ring_status.default_value);
+    if (!ring_status.is_calibrated) {
+        filtered_ring_value = 0.0f;
+        ring_filter_initialized = false;
+        callbacks.on_ring_data(0.0f);
+        return;
+    }
+    if (++ring_log_counter % 60 == 0) {
+        LOG_INFO(Input, "Ring-Con raw={}, default={}, min={}, max={}", value,
+                 ring_status.default_value, ring_status.min_value, ring_status.max_value);
+    }
+    const float raw_delta = static_cast<float>(value - ring_status.default_value);
+    // After the Ring-Con MCU is enabled, the neutral raw value can wander by
+    // a small amount while the sensor settles.  Ignore that band before any
+    // gain is applied so it cannot become a full-scale input.
+    constexpr float RingRawDeadzone = 120.0f;
+    if (std::abs(raw_delta) <= RingRawDeadzone) {
+        filtered_ring_value = 0.0f;
+        ring_filter_initialized = true;
+        callbacks.on_ring_data(0.0f);
+        return;
+    }
+
+    float normalized_value = raw_delta;
     if (normalized_value > 0) {
         normalized_value = normalized_value /
                            static_cast<float>(ring_status.max_value - ring_status.default_value);
@@ -91,7 +143,34 @@ void JoyconPoller::UpdateRing(s16 value, const RingStatus& ring_status) {
         normalized_value = normalized_value /
                            static_cast<float>(ring_status.default_value - ring_status.min_value);
     }
-    callbacks.on_ring_data(normalized_value);
+    // Ring-Con pressure can be reported with a low amplitude on some units.
+    // Apply the requested gain, then remove the small idle drift that is
+    // amplified along with the real signal.
+    constexpr float RingPressureGain = 2.5f;
+    normalized_value = std::clamp(normalized_value * RingPressureGain, -1.0f, 1.0f);
+    constexpr float RingIdleDeadzone = 0.08f;
+    if (std::abs(normalized_value) < RingIdleDeadzone) {
+        normalized_value = 0.0f;
+    } else {
+        const float sign = normalized_value < 0.0f ? -1.0f : 1.0f;
+        normalized_value = sign * (std::abs(normalized_value) - RingIdleDeadzone) /
+                          (1.0f - RingIdleDeadzone);
+    }
+
+    // A short one-pole filter suppresses one-frame Bluetooth/sensor spikes
+    // without making a deliberate squeeze feel delayed.
+    constexpr float RingFilterWeight = 0.30f;
+    if (!ring_filter_initialized) {
+        filtered_ring_value = normalized_value;
+        ring_filter_initialized = true;
+    } else {
+        filtered_ring_value =
+            filtered_ring_value * (1.0f - RingFilterWeight) + normalized_value * RingFilterWeight;
+    }
+    if (std::abs(filtered_ring_value) < 0.01f) {
+        filtered_ring_value = 0.0f;
+    }
+    callbacks.on_ring_data(filtered_ring_value);
 }
 
 void JoyconPoller::UpdateActiveLeftPadInput(const InputReportActive& input,
@@ -131,7 +210,8 @@ void JoyconPoller::UpdateActiveLeftPadInput(const InputReportActive& input,
 }
 
 void JoyconPoller::UpdateActiveRightPadInput(const InputReportActive& input,
-                                             const MotionStatus& motion_status) {
+                                             const MotionStatus& motion_status,
+                                             bool ringcon_mode) {
     static constexpr std::array<Joycon::PadButton, 11> right_buttons{
         Joycon::PadButton::Y,    Joycon::PadButton::X,       Joycon::PadButton::B,
         Joycon::PadButton::A,    Joycon::PadButton::RightSL, Joycon::PadButton::RightSR,
@@ -157,7 +237,7 @@ void JoyconPoller::UpdateActiveRightPadInput(const InputReportActive& input,
     callbacks.on_stick_data(static_cast<int>(PadAxes::RightStickY), right_axis_y);
 
     if (motion_status.is_enabled) {
-        auto right_motion = GetMotionInput(input, motion_status);
+        auto right_motion = GetMotionInput(input, motion_status, ringcon_mode);
         // Rotate motion axis to the correct direction
         right_motion.accel_x = -right_motion.accel_x;
         right_motion.accel_y = -right_motion.accel_y;
@@ -348,13 +428,18 @@ s16 JoyconPoller::GetRawIMUValues(std::size_t sensor, size_t axis,
 }
 
 MotionData JoyconPoller::GetMotionInput(const InputReportActive& input,
-                                        const MotionStatus& motion_status) const {
+                                        const MotionStatus& motion_status, bool ringcon_mode) {
     MotionData motion{};
     const auto& accel_cal = motion_calibration.accelerometer;
     const auto& gyro_cal = motion_calibration.gyro;
     const s16 raw_accel_x = input.motion_input[1];
     const s16 raw_accel_y = input.motion_input[0];
     const s16 raw_accel_z = input.motion_input[2];
+    // MaybeRingcon keeps angular-rate data in the first IMU frame's gyro
+    // slots (report bytes 19/21/23, indices 3/4/5 here).  The later values
+    // at bytes 31/33/35 are orientation/accessory data and can become large
+    // when the ring is held at a different angle; treating them as gyro
+    // makes a stationary right Joy-Con spin continuously.
     const s16 raw_gyro_x = input.motion_input[4];
     const s16 raw_gyro_y = input.motion_input[3];
     const s16 raw_gyro_z = input.motion_input[5];
@@ -369,6 +454,154 @@ MotionData JoyconPoller::GetMotionInput(const InputReportActive& input,
     motion.gyro_x = GetGyroValue(raw_gyro_x, gyro_cal[1], motion_status.gyro_sensitivity);
     motion.gyro_y = GetGyroValue(raw_gyro_y, gyro_cal[0], motion_status.gyro_sensitivity);
     motion.gyro_z = GetGyroValue(raw_gyro_z, gyro_cal[2], motion_status.gyro_sensitivity);
+
+    // Ordinary Joy-Con mode uses a short startup calibration. Ring-Con mode
+    // can settle to a different fixed value several seconds after the MCU
+    // switches report format, so it uses the stability-based calibration
+    // below instead.
+    constexpr u32 GyroBiasSamples = 120;
+    if (!ringcon_mode && gyro_bias_samples < GyroBiasSamples) {
+        gyro_bias_sum[0] += motion.gyro_x;
+        gyro_bias_sum[1] += motion.gyro_y;
+        gyro_bias_sum[2] += motion.gyro_z;
+        ++gyro_bias_samples;
+        if (gyro_bias_samples == GyroBiasSamples) {
+            for (std::size_t index = 0; index < gyro_bias.size(); ++index) {
+                gyro_bias[index] = gyro_bias_sum[index] / static_cast<f32>(GyroBiasSamples);
+            }
+            LOG_INFO(Input, "Joy-Con gyro startup bias calibrated: x={}, y={}, z={}",
+                     gyro_bias[0], gyro_bias[1], gyro_bias[2]);
+        }
+        motion.gyro_x = 0.0f;
+        motion.gyro_y = 0.0f;
+        motion.gyro_z = 0.0f;
+    } else if (!ringcon_mode) {
+        motion.gyro_x -= gyro_bias[0];
+        motion.gyro_y -= gyro_bias[1];
+        motion.gyro_z -= gyro_bias[2];
+    }
+
+    if (ringcon_mode && device_type == ControllerType::Right) {
+        constexpr s16 RawStableTolerance = 256;
+        constexpr u32 StableSamplesToCalibrate = 40;
+        const std::array<s16, 3> raw_gyro{raw_gyro_x, raw_gyro_y, raw_gyro_z};
+
+        if (!ringcon_raw_initialized) {
+            ringcon_last_raw_gyro = raw_gyro;
+            ringcon_raw_initialized = true;
+            ringcon_stable_samples = 0;
+        } else {
+            const bool stable =
+                std::abs(raw_gyro[0] - ringcon_last_raw_gyro[0]) <= RawStableTolerance &&
+                std::abs(raw_gyro[1] - ringcon_last_raw_gyro[1]) <= RawStableTolerance &&
+                std::abs(raw_gyro[2] - ringcon_last_raw_gyro[2]) <= RawStableTolerance;
+            ringcon_stable_samples = stable ? ringcon_stable_samples + 1 : 0;
+            ringcon_last_raw_gyro = raw_gyro;
+        }
+
+        if (!ringcon_bias_initialized && ringcon_stable_samples >= StableSamplesToCalibrate) {
+            ringcon_gyro_bias = {motion.gyro_x, motion.gyro_y, motion.gyro_z};
+            ringcon_bias_initialized = true;
+            LOG_INFO(Input, "Ring-Con gyro zero learned: x={}, y={}, z={}",
+                     ringcon_gyro_bias[0], ringcon_gyro_bias[1], ringcon_gyro_bias[2]);
+        }
+
+        if (!ringcon_bias_initialized) {
+            motion.gyro_x = 0.0f;
+            motion.gyro_y = 0.0f;
+            motion.gyro_z = 0.0f;
+        } else {
+            motion.gyro_x -= ringcon_gyro_bias[0];
+            motion.gyro_y -= ringcon_gyro_bias[1];
+            motion.gyro_z -= ringcon_gyro_bias[2];
+            if (ringcon_stable_samples >= StableSamplesToCalibrate) {
+                constexpr f32 BiasFollow = 0.02f;
+                ringcon_gyro_bias[0] += motion.gyro_x * BiasFollow;
+                ringcon_gyro_bias[1] += motion.gyro_y * BiasFollow;
+                ringcon_gyro_bias[2] += motion.gyro_z * BiasFollow;
+                motion.gyro_x *= 1.0f - BiasFollow;
+                motion.gyro_y *= 1.0f - BiasFollow;
+                motion.gyro_z *= 1.0f - BiasFollow;
+            }
+
+            // The MaybeRingcon right-hand report uses a much larger angular
+            // range than the ordinary Joy-Con path. Without this correction,
+            // a normal lift/turn is interpreted as several full rotations per
+            // second by the emulator's orientation integrator.
+            constexpr f32 RingconGyroGain = 0.20f;
+            motion.gyro_x *= RingconGyroGain;
+            motion.gyro_y *= RingconGyroGain;
+            motion.gyro_z *= RingconGyroGain;
+        }
+
+        // The MaybeRingcon report's right-hand angular-rate fields are not
+        // stable enough to integrate into an emulator quaternion. Use the
+        // reliable accelerometer path for Ring-Con orientation instead. This
+        // keeps tilt detection and Ring-Con pressure input available while
+        // preventing a lift or report-format jump from becoming a full spin.
+        motion.gyro_x = 0.0f;
+        motion.gyro_y = 0.0f;
+        motion.gyro_z = 0.0f;
+        filtered_gyro = {};
+        gyro_filter_initialized = true;
+    }
+
+    // A stationary Joy-Con reports a small amount of gyro noise.  Remove only
+    // the near-zero noise and smooth the remaining signal so real movement is
+    // still responsive.
+    // In MaybeRingcon mode the right Joy-Con's calibrated zero can be a
+    // little above the ordinary Joy-Con threshold even when the ring is
+    // completely still (for this device it is about 0.0694).  Letting that
+    // value through makes the game accumulate a continuous rotation.
+    const f32 gyro_deadzone = ringcon_mode ? 0.12f : 0.05f;
+    // Ring-Con mode otherwise retains too much of the previous gyro sample,
+    // which feels like inertia after the right hand stops moving. Use a
+    // faster response for the right Joy-Con while keeping ordinary Joy-Con
+    // motion smoothing unchanged.
+    const f32 gyro_filter_weight = ringcon_mode ? 0.45f : 0.15f;
+    std::array<f32, 3> gyro{motion.gyro_x, motion.gyro_y, motion.gyro_z};
+    for (f32& value : gyro) {
+        if (std::abs(value) < gyro_deadzone) {
+            value = 0.0f;
+        }
+    }
+    if (!gyro_filter_initialized) {
+        filtered_gyro = gyro;
+        gyro_filter_initialized = true;
+    } else {
+        for (std::size_t index = 0; index < filtered_gyro.size(); ++index) {
+            filtered_gyro[index] = filtered_gyro[index] * (1.0f - gyro_filter_weight) +
+                                   gyro[index] * gyro_filter_weight;
+        }
+    }
+    motion.gyro_x = filtered_gyro[0];
+    motion.gyro_y = filtered_gyro[1];
+    motion.gyro_z = filtered_gyro[2];
+
+    if (ringcon_mode && device_type == ControllerType::Right &&
+        ++ring_motion_log_counter % 60 == 0) {
+        LOG_INFO(Input, "Ring-Con IMU raw=({}, {}, {}), gyro=({}, {}, {}), accel=({}, {}, {})",
+                 raw_gyro_x, raw_gyro_y, raw_gyro_z, motion.gyro_x, motion.gyro_y, motion.gyro_z,
+                 motion.accel_x, motion.accel_y, motion.accel_z);
+    }
+
+    // The orientation view also uses gravity from the accelerometer.  Apply a
+    // slower low-pass there so one-frame gravity noise does not make a still
+    // controller visibly wobble.
+    constexpr f32 AccelFilterWeight = 0.15f;
+    const std::array<f32, 3> accel{motion.accel_x, motion.accel_y, motion.accel_z};
+    if (!accel_filter_initialized) {
+        filtered_accel = accel;
+        accel_filter_initialized = true;
+    } else {
+        for (std::size_t index = 0; index < filtered_accel.size(); ++index) {
+            filtered_accel[index] = filtered_accel[index] * (1.0f - AccelFilterWeight) +
+                                    accel[index] * AccelFilterWeight;
+        }
+    }
+    motion.accel_x = filtered_accel[0];
+    motion.accel_y = filtered_accel[1];
+    motion.accel_z = filtered_accel[2];
 
     // TODO(German77): Return all three samples data
     return motion;

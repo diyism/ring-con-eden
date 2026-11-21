@@ -236,6 +236,7 @@ private:
     u8 total_push_count = 0;
 
     const u8 device_id = 0x20;
+    mutable u32 sensor_log_counter{};
     const FirmwareVersion version = {
         .sub = 0x0,
         .main = 0x2c,

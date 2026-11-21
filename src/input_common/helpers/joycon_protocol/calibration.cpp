@@ -136,19 +136,40 @@ Common::Input::DriverResult CalibrationProtocol::GetImuCalibration(MotionCalibra
 Common::Input::DriverResult CalibrationProtocol::GetRingCalibration(RingCalibration& calibration,
                                                                     s16 current_value) {
     constexpr s16 DefaultRingRange{800};
+    constexpr u16 BaselineSamples{600};
 
-    // TODO: Get default calibration form ring itself
+    // The Ring-Con's neutral value is not universal.  The first report after
+    // MCU startup can also be a stale report, so average a short stationary
+    // warm-up window instead of using the first sample as the baseline.
     if (ring_data_max == 0 && ring_data_min == 0) {
         ring_data_max = current_value + DefaultRingRange;
         ring_data_min = current_value - DefaultRingRange;
         ring_data_default = current_value;
     }
-    ring_data_max = (std::max)(ring_data_max, current_value);
-    ring_data_min = (std::min)(ring_data_min, current_value);
+    if (ring_data_samples < BaselineSamples) {
+        ++ring_data_samples;
+        // Use a slow settling baseline instead of averaging the stale first
+        // reports.  Some Ring-Con units take several seconds to settle after
+        // the MCU enters MaybeRingcon mode.
+        constexpr s32 BaselineWeightNumerator{1};
+        constexpr s32 BaselineWeightDenominator{20};
+        ring_data_default = static_cast<s16>(
+            (static_cast<s32>(ring_data_default) * (BaselineWeightDenominator - BaselineWeightNumerator) +
+             static_cast<s32>(current_value) * BaselineWeightNumerator) /
+            BaselineWeightDenominator);
+    }
+    // Do not keep learning the range after startup.  A malformed or noisy
+    // report during gameplay must not redefine the neutral calibration and
+    // turn the next ordinary sample into a full-scale squeeze.
+    if (ring_data_samples < BaselineSamples) {
+        ring_data_max = (std::max)(ring_data_max, current_value);
+        ring_data_min = (std::min)(ring_data_min, current_value);
+    }
     calibration = {
         .default_value = ring_data_default,
         .max_value = ring_data_max,
         .min_value = ring_data_min,
+        .is_calibrated = ring_data_samples >= BaselineSamples,
     };
     return Common::Input::DriverResult::Success;
 }

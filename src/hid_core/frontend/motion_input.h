@@ -47,6 +47,7 @@ public:
     void SetUserGyroThreshold(f32 threshold);
 
     void EnableReset(bool reset);
+    void SetFacingOffset(bool enabled);
     void ResetRotations();
     void ResetQuaternion();
 
@@ -70,6 +71,7 @@ private:
     void StopCalibration();
     void ResetOrientation();
     void SetOrientationFromAccelerometer();
+    [[nodiscard]] Common::Vec<f32, 4> GetOutputQuaternion() const;
 
     // PID constants
     f32 kp;
@@ -110,6 +112,7 @@ private:
 
     // Use accelerometer values to calculate position
     bool only_accelerometer = true;
+    bool facing_offset = false;
 
     // When enabled it will aggressively adjust for gyro drift
     bool calibration_mode = false;

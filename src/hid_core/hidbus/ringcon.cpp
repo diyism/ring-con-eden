@@ -30,6 +30,11 @@ void RingController::OnInit() {
 }
 
 void RingController::OnRelease() {
+    // EmulatedController preserves Ring polling while the hidbus device is
+    // alive.  Drop to Passive first so the final Active request below is an
+    // explicit teardown rather than another game startup request.
+    input->SetPollingMode(Core::HID::EmulatedDeviceIndex::RightIndex,
+                          Common::Input::PollingMode::Passive);
     input->SetPollingMode(Core::HID::EmulatedDeviceIndex::RightIndex,
                           Common::Input::PollingMode::Active);
     return;
@@ -86,7 +91,12 @@ RingController::RingConData RingController::GetSensorValue() const {
         .data = 0,
     };
 
-    const f32 force_value = input->GetRingSensorForce().force * range;
+    const f32 normalized_force = input->GetRingSensorForce().force;
+    const f32 force_value = normalized_force * range;
+    if (++sensor_log_counter % 60 == 0) {
+        LOG_INFO(Service_HID, "Ring-Con sensor normalized={}, output={}", normalized_force,
+                 static_cast<s16>(force_value) + idle_value);
+    }
     ringcon_sensor_value.data = static_cast<s16>(force_value) + idle_value;
 
     return ringcon_sensor_value;

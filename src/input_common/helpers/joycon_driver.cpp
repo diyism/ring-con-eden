@@ -222,6 +222,7 @@ void JoyconDriver::OnNewData(std::span<u8> buffer) {
 
     const RingStatus ring_status{
         .is_enabled = ring_connected,
+        .is_calibrated = ring_calibration.is_calibrated,
         .default_value = ring_calibration.default_value,
         .max_value = ring_calibration.max_value,
         .min_value = ring_calibration.min_value,
@@ -275,6 +276,15 @@ Common::Input::DriverResult JoyconDriver::SetPollingMode() {
         disable_input_thread = false;
     };
     disable_input_thread = true;
+
+    // Ring Fit asks the right Joy-Con to switch back to ordinary active
+    // polling after it has attached the Ring-Con hidbus.  That request must
+    // not tear down the Ring-Con MCU session; the hidbus reader owns the
+    // device while hidbus_enabled is still set.  SetActiveMode() has the
+    // same guard below for callers that clear the flag before reaching here.
+    if (ring_protocol->IsEnabled() && hidbus_enabled) {
+        return Common::Input::DriverResult::Success;
+    }
 
     rumble_protocol->EnableRumble(vibration_enabled && supported_features.vibration);
 
@@ -330,6 +340,9 @@ Common::Input::DriverResult JoyconDriver::SetPollingMode() {
             result = ring_protocol->StartRingconPolling();
         }
         if (result == Common::Input::DriverResult::Success) {
+            // Ring-Con mode changes the IMU payload. Relearn the gyro bias
+            // after that mode switch rather than using ordinary-mode data.
+            joycon_poller->ResetMotionCalibration();
             ring_connected = true;
             return result;
         }
@@ -456,6 +469,15 @@ Common::Input::DriverResult JoyconDriver::SetActiveMode() {
         is_ring_disabled_by_irs = false;
         SetActiveMode();
         return SetRingConMode();
+    }
+
+    // Ring Fit sends an ordinary Active request during startup even though
+    // the right Joy-Con is already serving Ring-Con data.  Preserve the
+    // Ring-Con session instead of switching the MCU back to normal IMU mode.
+    // SetPassiveMode() clears hidbus_enabled first, so RingController::OnRelease
+    // can still deliberately leave Ring-Con mode when needed.
+    if (ring_protocol->IsEnabled() && hidbus_enabled) {
+        return Common::Input::DriverResult::Success;
     }
 
     std::scoped_lock lock{mutex};
